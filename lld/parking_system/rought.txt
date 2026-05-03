@@ -1,0 +1,9 @@
+
+
+Terms and class
+1. Vehicle - it contains Vehicle info
+2. parking spot - it contains parking spoct into
+3. ticket  - contians ticket info
+4. parking lot - main brain to manage parking things
+
+vehicle comes - (available spot based on the vihecle)
