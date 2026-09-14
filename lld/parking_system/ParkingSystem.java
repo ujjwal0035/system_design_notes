@@ -6,10 +6,14 @@ enum VehicleType{ TWO_WHEELER, THREE_WHEELER, FOUR_WHEELER, TRUCK };
 class Vehicle {
     VehicleType type;
     String number;
+    boolean isVIP;
+    boolean isEvCar;
 
     Vehicle(VehicleType type, String number) {
         this.type = type;
         this.number = number;
+        this.isVIP = isVIP;
+        this.isEvCar = isEvCar;
     }
 }
 
@@ -17,13 +21,15 @@ class ParkingSpot {
     int id;
     VehicleType vehicleType;
     boolean isOccupied;
+    int distanceFromEntryGate;
     boolean isVIP;
     boolean isEvChargingPoint;
 
-    ParkingSpot(int id, VehicleType vehicleType, boolean isOccupied, boolean isVIP, boolean isEvChargingPoint) {
+    ParkingSpot(int id, VehicleType vehicleType, boolean isOccupied, int distanceFromEntryGate, boolean isVIP, boolean isEvChargingPoint) {
         this.id = id;
         this.vehicleType = vehicleType;
         this.isOccupied = isOccupied;
+        this.distanceFromEntryGate = distanceFromEntryGate;
         this.isVIP = isVIP;
         this.isEvChargingPoint = isEvChargingPoint;
     }
@@ -42,55 +48,59 @@ class Ticket{
 }
 
 
+// this class manage the parking at right spot
 class ParkingManager{
-    Map<Integer, List<ParkingSpot>> _FlOOR_WISE_SPOT; 
+    Map<Integer, List<ParkingSpot>> _FlOOR_WISE_SPOT;
+    int minFloor = 0; int maxFloor = 0; // this to identify the how many floor of parking is there -ve and +ve
 
-    ParkingManager(Map<Integer, List<ParkingSpot>> floorWiseSpot){
+    ParkingManager(Map<Integer, List<ParkingSpot>> floorWiseSpot, int minFloor, int maxFloor){
         this._FlOOR_WISE_SPOT = floorWiseSpot;
+        this.minFloor = minFloor;
+        this.maxFloor = maxFloor;
     }
 
-    synchronized Ticket parkvehicle(Vehicle vehicle, boolean isVIP){ // assuming only gate for entry is avaible
-        for (Integer floor : _FlOOR_WISE_SPOT.keySet()) {
-            List<ParkingSpot> spots = _FlOOR_WISE_SPOT.get(floor);
-            
-            int leftIndex = 0; 
-            int rightIndex = spots.size() - 1;
+    boolean isValidSpot(Vehicle vehicle, ParkingSpot spot){
+        if(spot.isOccupied) return false;
+        if(spot.vehicleType != vehicle.type) return false;
+        if(vehicle.isVIP != spot.isVIP) return false;
+        if(vehicle.isEvCar != spot.isEvChargingPoint) return false;
+        return true;
+    }
 
-            while (leftIndex <= rightIndex) { // Standard two-pointer boundary
-                ParkingSpot spot1 = spots.get(leftIndex);
-                ParkingSpot spot2 = spots.get(rightIndex);
+    Ticket handleParkingVechile(int floor, Vehicle vehicle){
+        List<ParkingSpot> spots = this._FlOOR_WISE_SPOT.get(floor);
+        spots.sort((a,b) -> a.distanceFromEntryGate - b.distanceFromEntryGate); // sorting the spot based on the distance from gate
 
-                // Check Left Spot
-                if (isVIP && spot1.isVIP && !spot1.isOccupied && vehicle.type == spot1.vehicleType && spot1.isEvChargingPoint) {
-                    spot1.isOccupied = true;
-                    return new Ticket(vehicle, spot1);
-                }
-                
-                // Check Right Spot (only if it's a different spot than leftIndex)
-                if (leftIndex != rightIndex && isVIP && spot2.isVIP && !spot2.isOccupied && vehicle.type == spot2.vehicleType && spot2.isEvChargingPoint) {
-                    spot2.isOccupied = true;
-                    return new Ticket(vehicle, spot2);
-                }
-
-                // CRITICAL: Increment/Decrement indices to avoid infinite loop
-                leftIndex++;
-                rightIndex--;
+        for(ParkingSpot spot: spots){
+            if(isValidSpot(vehicle, spot)){
+                return new Ticket(vehicle, spot);
             }
-            for(ParkingSpot spot: spots){
-                if(isVIP && spot.isVIP && !spot.isOccupied && vehicle.type == spot.vehicleType && spot.isEvChargingPoint){
-                    spot.isOccupied = true;
-                    return new Ticket(vehicle, spot);
-                }
-                else if(!spot.isOccupied && vehicle.type == spot.vehicleType && spot.isEvChargingPoint){
-                    spot.isOccupied = true;
-                    return new Ticket(vehicle, spot);
-                }
+        }
+
+        return null;
+    } 
+
+    synchronized Ticket parkvehicle(Vehicle vehicle, boolean isVIP){ // assuming only gate for entry is avaible
+        // check if which floor is nearest to the gate assuming gate is at the ground floor
+        int floorGround = 0; int floorUp = 0; 
+        while(floorGround >= minFloor || floorUp <= maxFloor){
+            if(floorGround >= minFloor){
+                Ticket ticket = handleParkingVechile(floorGround, vehicle);
+                if(ticket != null) return ticket;
+                floorGround--;
+            }
+            if(floorUp <= maxFloor){
+                Ticket ticket = handleParkingVechile(floorUp, vehicle);
+                if(ticket != null) return ticket;
+                floorUp++;
             }
         }
         return null;
     }
 }
 
+
+// this is manage for exit service
 class ParkingService{
     Map<VehicleType, Integer> _FIXED_PRICE_VEHICLE_WISE;
 
