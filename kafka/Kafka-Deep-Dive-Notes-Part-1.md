@@ -1,6 +1,6 @@
 # Kafka — Deep Dive Notes (Part 1)
 
-> Interview-focused notes covering topics, partitions, keys, consumer groups, offsets, idempotency, replicas, leaders, ISR, acknowledgements, and durability.
+> Interview-focused notes covering topics, partitions, consumer groups, offsets, idempotency, replicas, leaders, ISR, acknowledgements, durability, and leader-election failure scenarios.
 
 ## 1. What problem does Kafka solve?
 
@@ -447,6 +447,7 @@ Producer -> Leader -> ACK
 Followers may still be catching up.
 
 ### acks=all
+
 Producer waits for the leader to acknowledge the record according to the in-sync replica rules.
 
 This is commonly paired with min.insync.replicas for stronger durability.
@@ -470,7 +471,223 @@ then only one in-sync replica remains.
 
 With acks=all and min.insync.replicas=2, Kafka can reject the write because the durability requirement cannot be met.
 
-## 22. Complete Event Flow
+## 22. ISR + acks + min.insync.replicas: Failure Scenarios
+
+This is a very important interview area.
+
+### Scenario A — Healthy cluster
+
+RF = 3
+min.insync.replicas = 2
+acks = all
+
+P0:
+B1 -> Leader
+B2 -> ISR
+B3 -> ISR
+
+ISR count = 3
+
+Producer writes Event 101.
+
+B1 appends Event 101 and the required ISR replicas replicate it.
+
+Result:
+ACK -> producer
+
+### Scenario B — One follower is down
+
+B3 crashes.
+
+Now:
+
+P0:
+B1 -> Leader
+B2 -> ISR
+B3 -> unavailable
+
+ISR = {B1, B2}
+ISR count = 2
+
+Because min.insync.replicas = 2:
+
+writes can still succeed with acks=all.
+
+This is the important availability/durability balance:
+> RF=3 + min ISR=2 tolerates one broker failure while still requiring two in-sync replicas for acknowledged writes.
+
+### Scenario C — ISR falls below minimum
+
+Suppose B2 also becomes unavailable.
+
+Now:
+
+ISR = {B1}
+ISR count = 1
+
+But:
+min.insync.replicas = 2
+
+With acks=all, new writes cannot satisfy the configured durability requirement and can fail.
+
+This is intentional.
+
+The system chooses:
+**reject the write rather than falsely claim the requested durability was achieved.**
+
+## 23. Leader Election
+
+Every partition has one leader at a time.
+
+Example:
+
+Before failure:
+
+P0
+B1 -> Leader
+B2 -> ISR
+B3 -> ISR
+
+If B1 fails:
+
+B2 -> New Leader
+B3 -> Follower
+
+The new leader is normally selected from an eligible in-sync replica.
+
+### Why ISR matters for leader election
+
+Suppose:
+
+B1 -> old leader -> offset 110
+B2 -> ISR        -> offset 110
+B3 -> replica    -> offset 100
+
+If B1 fails:
+
+B2 is a safe candidate because it has caught up to offset 110.
+
+If B3 became leader instead, records 101-110 could be missing from the new leader's log.
+
+Therefore:
+> ISR is important not only for producer durability, but also for safe leader election.
+
+## 24. Data-Loss Scenario with acks=1
+
+Suppose:
+
+P0:
+B1 -> Leader
+B2 -> Follower
+B3 -> Follower
+
+Producer sends Event 111.
+
+With acks=1:
+
+1. B1 writes Event 111.
+2. B1 sends ACK.
+3. Producer considers the write successful.
+4. B2/B3 have not replicated Event 111 yet.
+5. B1 crashes permanently before replication.
+
+If a different replica becomes leader without Event 111, the acknowledged event can be lost.
+
+This is why:
+> acks=1 provides weaker durability than acks=all.
+
+The exact failure outcome depends on replication state and leader-election configuration, but the core risk is that leader-only acknowledgement does not prove replication to the required ISR replicas.
+
+## 25. acks=all + min.insync.replicas
+
+Consider:
+
+RF = 3
+min.insync.replicas = 2
+acks = all
+
+If ISR = 3:
+- Strong write durability
+- Normal availability
+
+If ISR = 2:
+- Writes can continue
+- One more failure may make writes unavailable
+
+If ISR = 1:
+- Writes are rejected
+- This protects the configured durability requirement
+
+This gives a clear trade-off:
+
+More durability
+        |
+        v
+Potentially less write availability during failures
+
+## 26. Unclean Leader Election
+
+Normally, Kafka prefers an eligible in-sync replica for leader election.
+
+But consider:
+
+P0
+B1 -> old leader -> offset 110
+B2 -> ISR        -> offset 110
+B3 -> out of ISR -> offset 100
+
+Now B1 and B2 both become unavailable.
+
+Only B3 remains.
+
+B3 is missing offsets 101-110.
+
+If Kafka allows B3 to become leader through **unclean leader election**, the cluster can continue serving the partition, but the missing records can disappear from the active log.
+
+Conceptually:
+
+Old log:
+100 101 102 103 104 105 106 107 108 109 110
+
+B3 has:
+100
+
+After B3 becomes leader:
+100
+101-110 -> potentially unavailable/lost
+
+Therefore:
+
+**Clean election**
+- Prefer ISR
+- Better durability/consistency
+- May require waiting/failing writes if no eligible replica exists
+
+**Unclean election**
+- Allows an out-of-sync replica to become leader
+- Improves availability
+- Can cause data loss
+
+### Interview statement
+
+> For critical financial or transactional workloads, I would generally avoid unclean leader election because availability should not come at the cost of silently losing acknowledged business events.
+
+The correct production setting depends on workload requirements.
+
+## 27. Failure Matrix
+
+| Situation | Result |
+|---|---|
+| RF=3, ISR=3 | Healthy |
+| RF=3, ISR=2, min ISR=2 | Writes can continue with acks=all |
+| RF=3, ISR=1, min ISR=2 | acks=all writes fail |
+| Leader fails, ISR follower available | ISR follower can become leader |
+| Only out-of-sync replica remains + unclean election disabled | Partition may become unavailable |
+| Only out-of-sync replica remains + unclean election enabled | Availability improves, but data loss is possible |
+| acks=1 + leader fails before replication | Acknowledged data can potentially be lost |
+| acks=all + sufficient ISR | Stronger durability guarantee |
+
+## 28. Complete Event Flow
 
 Example CallPlus event:
 
@@ -510,7 +727,7 @@ committed offset = 9813
 
 Meaning offset 9813 is the next record to consume.
 
-## 23. CallPlus Example
+## 29. CallPlus Example
 
 Possible event pipeline:
 
@@ -542,7 +759,7 @@ for the same call needs ordering.
 
 Monitor for hot keys/partitions.
 
-## 24. Interview Cheat Sheet
+## 30. Interview Cheat Sheet
 
 | Concept | Remember |
 |---|---|
@@ -562,9 +779,11 @@ Monitor for hot keys/partitions.
 | acks=1 | Leader acknowledgement |
 | acks=all | Stronger ISR-based acknowledgement |
 | min.insync.replicas | Minimum ISR required for acks=all writes |
+| Clean leader election | Prefer eligible ISR replica |
+| Unclean election | Out-of-sync replica may become leader; data loss possible |
 | Idempotency | Reprocessing produces the same final business result |
 
-## 25. Senior-Level Rules
+## 31. Senior-Level Rules
 
 1. Ordering is a partition-level property, not a topic-level property.
 2. Consumer parallelism is bounded by partition count.
@@ -578,24 +797,26 @@ Monitor for hot keys/partitions.
 10. Kafka exactly-once semantics do not automatically make external DB/API side effects exactly once.
 11. acks=all + min.insync.replicas can provide stronger durability guarantees.
 12. A committed offset represents the next record the consumer group should resume from.
+13. ISR is central to both durability and safe leader election.
+14. Unclean leader election trades durability for availability and should be evaluated carefully for critical workloads.
+15. RF=3 + min ISR=2 is a common starting point, not a universal rule.
 
 ---
 
 ## Next Kafka Topics
 
-1. Leader election + ISR failure scenarios
-2. Consumer polling
-3. Consumer groups in depth
-4. Rebalancing
-5. Heartbeats and session.timeout.ms
-6. max.poll.interval.ms
-7. Consumer lag
-8. Producer internals
-9. Batching / linger.ms / compression
-10. Retries and idempotent producer
-11. Delivery semantics
-12. Kafka transactions / exactly-once
-13. Retention and log segments
-14. Log compaction
-15. Kafka performance internals
-16. Production failure scenarios
+1. Consumer polling
+2. Consumer groups in depth
+3. Rebalancing
+4. Heartbeats and session.timeout.ms
+5. max.poll.interval.ms
+6. Consumer lag
+7. Producer internals
+8. Batching / linger.ms / compression
+9. Retries and idempotent producer
+10. Delivery semantics
+11. Kafka transactions / exactly-once
+12. Retention and log segments
+13. Log compaction
+14. Kafka performance internals
+15. Production failure scenarios
