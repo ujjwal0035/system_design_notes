@@ -500,3 +500,38 @@ Status: [ ]
 * [ ] Ready for FAANG-level interviews
 
 ---
+
+
+---
+
+# Kafka Deep Dive
+
+Status: [/] In Progress
+
+## Notes
+
+* [x] Topic vs Partition
+* [x] Partition ordering and parallelism
+* [x] Custom partition keys
+* [x] Hot partitions
+* [x] Partition count considerations
+* [x] Consumer groups
+* [x] Offsets and committed offsets
+* [x] At-least-once processing
+* [x] Idempotent consumers
+* [x] Replication factor
+* [x] Leader and follower replicas
+* [x] ISR (In-Sync Replicas)
+* [x] acks
+* [x] min.insync.replicas
+* [ ] Leader election failure scenarios
+* [ ] Consumer rebalancing
+* [ ] Producer internals
+* [ ] Consumer internals
+* [ ] Transactions / exactly-once
+* [ ] Retention / log segments / compaction
+* [ ] Kafka performance and production troubleshooting
+
+## Detailed Notes
+
+[Kafka Deep Dive Notes — Part 1](./kafka/Kafka-Deep-Dive-Notes-Part-1.md)
